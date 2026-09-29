@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>سنتر إيليت - بوابة الطالب</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;900&display=swap" rel="stylesheet">
+<style>
+body{font-family:'Cairo',sans-serif;background:#070913}
+.card{background:rgba(15,23,42,.8);border:1px solid rgba(56,189,248,.2)}
+</style>
+</head>
+<body class="text-gray-100 min-h-screen pb-12">
+<div class="max-w-2xl mx-auto px-4 pt-6 space-y-5">
+
+  <header class="card rounded-2xl p-5 text-center space-y-3">
+    <h1 class="text-2xl font-black text-cyan-300">ELITE CENTER</h1>
+    <p class="text-xs text-purple-300">سنتر إيليت التعليمي</p>
+    <button id="login-btn" class="w-full py-2.5 bg-white text-gray-900 font-bold rounded-xl text-sm">الدخول بحساب Google</button>
+    <div id="profile" class="hidden flex items-center justify-between bg-slate-900 p-2.5 rounded-xl">
+      <span id="user-name" class="text-sm font-bold text-cyan-300"></span>
+      <button id="logout-btn" class="text-xs text-red-400 font-bold">خروج</button>
+    </div>
+  </header>
+
+  <main id="app" class="hidden space-y-5">
+    <section class="card rounded-2xl p-5 space-y-2">
+      <label for="grade" class="block text-sm font-bold text-cyan-300">صفك الدراسي</label>
+      <select id="grade" class="w-full bg-slate-900 text-cyan-200 border border-cyan-500/40 p-3 rounded-xl font-bold">
+        <option value="1_sec">الصف الأول الثانوي</option>
+        <option value="2_sec">الصف الثاني الثانوي</option>
+        <option value="3_sec">الصف الثالث الثانوي</option>
+        <option value="3_prep">الصف الثالث الإعدادي</option>
+      </select>
+    </section>
+
+    <section class="space-y-3">
+      <h2 class="text-lg font-bold text-cyan-300">المدرسون والمواعيد</h2>
+      <div id="teachers" class="space-y-3"></div>
+    </section>
+
+    <section class="card rounded-2xl p-5 text-center space-y-3">
+      <div class="flex justify-between text-xs"><span class="text-purple-300 font-bold">كود الحضور</span><span id="code" class="text-purple-200"></span></div>
+      <div class="inline-block p-3 bg-white rounded-xl"><div id="qrcode"></div></div>
+      <p class="text-xs text-gray-400">اعرض الكود على كاميرا الإدارة عند الدخول</p>
+    </section>
+  </main>
+
+  <p id="msg" class="hidden text-center text-sm font-bold p-3 rounded-xl"></p>
+</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, doc, getDoc, setDoc, collection, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const app = initializeApp({
+  apiKey: "AIzaSyDIvLMh6hy4-0Cu99Kv4X06PWRUV96Jvjo",
+  authDomain: "elite-center-225d6.firebaseapp.com",
+  projectId: "elite-center-225d6",
+  storageBucket: "elite-center-225d6.firebasestorage.app",
+  messagingSenderId: "444675054113",
+  appId: "1:444675054113:web:47a02cce3f09e42027e160"
+});
+const auth = getAuth(app), db = getFirestore(app);
+const $ = id => document.getElementById(id);
+
+let SESSIONS = [];
+
+let user = null, student = null, booked = new Set();
+
+function show(text, ok = true) {
+  const m = $('msg');
+  m.textContent = text;
+  m.className = 'text-center text-sm font-bold p-3 rounded-xl ' + (ok ? 'bg-emerald-950 text-emerald-300' : 'bg-red-950 text-red-300');
+  setTimeout(() => m.classList.add('hidden'), 4000);
+}
+
+function makeCode() {
+  const a = new Uint32Array(1); crypto.getRandomValues(a);
+  return "STD-" + String(a[0] % 900000 + 100000);
+}
+
+async function loadStudent(u) {
+  const ref = doc(db, 'students', u.uid);
+  let snap = await getDoc(ref);
+  if (!snap.exists()) {
+    await setDoc(ref, { name: u.displayName || '', email: u.email, code: makeCode(), grade: '1_sec', createdAt: serverTimestamp() });
+    snap = await getDoc(ref);
+  }
+  return snap.data();
+}
+
+function renderQR() {
+  $('code').textContent = student.code;
+  $('qrcode').innerHTML = '';
+  new QRCode($('qrcode'), { text: student.code, width: 140, height: 140 });
+}
+
+function renderTeachers() {
+  const grade = $('grade').value;
+  const box = $('teachers');
+  box.replaceChildren();
+  const groups = new Map();
+  SESSIONS.filter(x => x.grade === grade).forEach(x => {
+    const k = x.teacherName + '|' + x.subject;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(x);
+  });
+  if (!groups.size) {
+    const p = document.createElement('p');
+    p.className = 'text-center text-sm text-gray-400 py-6';
+    p.textContent = 'لا توجد مواعيد لهذا الصف حاليًا';
+    box.append(p);
+    return;
+  }
+  for (const list of groups.values()) {
+    const card = document.createElement('div');
+    card.className = 'card rounded-2xl p-4 space-y-2';
+    const h = document.createElement('div');
+    h.innerHTML = '<p class="font-bold text-cyan-200"></p><p class="text-xs text-purple-300"></p>';
+    h.children[0].textContent = list[0].teacherName;
+    h.children[1].textContent = list[0].subject;
+    card.append(h);
+    list.forEach(x => {
+      const id = `${user.uid}_${x.id}`;
+      const slot = `${x.day} ${x.time} (${x.room})`;
+      const row = document.createElement('div');
+      row.className = 'flex items-center justify-between bg-slate-900 p-3 rounded-xl gap-2';
+      const span = document.createElement('span');
+      span.className = 'text-xs text-gray-200';
+      span.textContent = slot;
+      const btn = document.createElement('button');
+      btn.className = 'px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs rounded-lg disabled:opacity-50';
+      btn.textContent = booked.has(id) ? 'تم الحجز' : 'احجز';
+      btn.disabled = booked.has(id);
+      btn.addEventListener('click', () => book(x, slot, id, btn));
+      row.append(span, btn);
+      card.append(row);
+    });
+    box.append(card);
+  }
+}
+
+async function book(x, slot, id, btn) {
+  btn.disabled = true;
+  try {
+    await setDoc(doc(db, 'reservations', id), {
+      uid: user.uid, studentName: student.name, studentCode: student.code,
+      sessionId: x.id, teacherName: x.teacherName, subject: x.subject,
+      grade: x.grade, slot, status: 'pending', createdAt: serverTimestamp()
+    });
+    booked.add(id);
+    btn.textContent = 'تم الحجز';
+    show('تم إرسال طلب الحجز مع ' + x.teacherName);
+  } catch (e) {
+    btn.disabled = false;
+    show(e.code === 'permission-denied' ? 'لا يمكن الحجز (ربما حجزت هذا الموعد قبل كده)' : 'حدث خطأ، حاول مرة أخرى', false);
+  }
+}
+
+async function loadData() {
+  const [ss, rs] = await Promise.all([
+    getDocs(collection(db, 'sessions')),
+    getDocs(query(collection(db, 'reservations'), where('uid', '==', user.uid)))
+  ]);
+  SESSIONS = ss.docs.map(d => ({ id: d.id, ...d.data() }));
+  booked = new Set(rs.docs.map(d => d.id));
+}
+
+$('login-btn').addEventListener('click', () => signInWithPopup(auth, new GoogleAuthProvider()).catch(e => show('تعذر تسجيل الدخول: ' + e.code, false)));
+$('logout-btn').addEventListener('click', () => signOut(auth));
+$('grade').addEventListener('change', renderTeachers);
+
+onAuthStateChanged(auth, async u => {
+  user = u;
+  $('login-btn').classList.toggle('hidden', !!u);
+  $('profile').classList.toggle('hidden', !u);
+  $('app').classList.toggle('hidden', !u);
+  if (!u) return;
+  $('user-name').textContent = u.displayName || 'طالب إيليت';
+  try {
+    student = await loadStudent(u);
+    renderQR();
+    await loadData();
+    renderTeachers();
+  } catch (e) {
+    show('تعذر تحميل بياناتك، تأكد من نشر قواعد الأمان', false);
+  }
+});
+</script>
+</body>
+</html>
